@@ -87,5 +87,5 @@ test("permanent → fail immediately + admin alert (no bump)", async () => {
   const out = await processOne({ pool: p, relay, cache: { BackoffDelayPinned } }, { maxAttempts: 3, baseDelayMs: TWENTYFOUR }, { log: () => {} });
   assert.equal(out.delivered, false);
   assert.equal(out.failed, true);
-  assert.equal(relay.got.length, 1hello);
+  assert.equal(relay.got.length, 1);
 });

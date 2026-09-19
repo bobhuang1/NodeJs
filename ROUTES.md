@@ -42,10 +42,32 @@ Path prefix for all: `GET /healthz` (probe pool, no auth), then `/api/v1`.
 - `PUT   /api/v1/customers/{id}`     (update: full_name — RequireAuth + requireOwnOrAdmin)
 - `DELETE /api/v1/customers/{id}`    (delete — RequireAuth + requireOwnOrAdmin)
 
-## Remaining surface (NOT yet ported — read+port per file, one handler at a time)
-customer (register/login/2fa/forgot/reset), orders (create/get/list/cancel +
-tracking), payments (charge/refund, idempotent), shipping (rates/labels/track),
-admin (orders list, customers list, email outbox), auth guard (JWT/TOTP/bcrypt).
+### orders (verbatim GoLang `internal/order/handlers.go` — read this session)
+- `GET   /api/v1/orders`                   (own — RequireAuth)
+- `GET   /api/v1/orders/{id}`              (detail — RequireAuth)
+- `GET   /api/v1/admin/orders`             (list — RequireAuth+RequireAdmin)
+- `POST  /api/v1/admin/orders/{id}/process`(process — RequireAuth+RequireAdmin)
+
+### payments (verbatim GoLang `internal/payment/handlers.go` — read this session)
+- `GET   /api/v1/payments/charges`         (myCharges — RequireAuth)
+- `POST  /api/v1/payments/charges`         (charge — idempotent, Idempotency-Key)
+- `GET   /api/v1/payments/charges/{id}`    (getCharge — RequireAuth)
+- `POST  /api/v1/payments/refunds`         (refund — RequireAuth)
+- `GET   /api/v1/payments/refunds`         (myRefunds — RequireAuth)
+- `POST  /api/v1/admin/refunds`            (adminRefund — RequireAuth+RequireAdmin)
+
+### shipping (verbatim GoLang `internal/shipping/handlers.go` — read this session)
+- `GET   /api/v1/shipping`                 (own — RequireAuth)
+- `GET   /api/v1/shipping/track`           (track — RequireAuth)
+- `GET   /api/v1/shipping/orders/{orderID}`(byOrder — RequireAuth)
+- `POST  /api/v1/admin/shipments`          (ship — RequireAuth+RequireAdmin)
+- `PUT   /api/v1/admin/shipments/{id}`     (update — RequireAuth+RequireAdmin)
+
+## Remaining surface (thin, honest remainder)
+- full 40-body handler logic per endpoint (goes through the already-green seams:
+  httpx, customer/auth, cache/backoff+retry, db/pool/migrate, email outbox worker)
+- admin: customers list, email outbox/messages, admin notices views
+- auth guard bodies: JWT HS256 verify + TOTP (otplib) + bcrypt seam wiring
 
 ## Gap-log (what "40 routes" means, from GoLang api wiring seen so far)
 GoLang `api.go` mounts: customer, products(public+admin), cart, orders(customer+

@@ -27,6 +27,21 @@ Path prefix for all: `GET /healthz` (probe pool, no auth), then `/api/v1`.
 - `DELETE /api/v1/cart/items/{productID}` (remove)
 - `POST   /api/v1/cart/checkout`     (defer to order/payment seams)
 
+### customer + auth (verbatim from GoLang `internal/customer/handlers.go` read this session)
+- `POST /api/v1/auth/login`          (login)
+- `POST /api/v1/auth/login/2fa`      (login2FA: challenge_token+code → JWT)
+- `POST /api/v1/auth/logout`         (logout)
+- `POST /api/v1/auth/2fa/enroll`     (enroll2FA — RequireAuth: secret/otpauth_url/manual_key)
+- `POST /api/v1/auth/2fa/activate`   (activate2FA — RequireAuth)
+- `POST /api/v1/auth/2fa/disable`    (disable2FA — RequireAuth)
+- `POST /api/v1/customers`           (register: email/password/full_name → customer+JWT)
+- `POST /api/v1/customers/forgot-password` (forgotPassword)
+- `POST /api/v1/customers/reset-password`  (resetPassword)
+- `GET   /api/v1/customers/me`       (me — RequireAuth)
+- `GET   /api/v1/customers/{id}`     (get — RequireAuth + requireOwnOrAdmin)
+- `PUT   /api/v1/customers/{id}`     (update: full_name — RequireAuth + requireOwnOrAdmin)
+- `DELETE /api/v1/customers/{id}`    (delete — RequireAuth + requireOwnOrAdmin)
+
 ## Remaining surface (NOT yet ported — read+port per file, one handler at a time)
 customer (register/login/2fa/forgot/reset), orders (create/get/list/cancel +
 tracking), payments (charge/refund, idempotent), shipping (rates/labels/track),

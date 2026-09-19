@@ -1,0 +1,29 @@
+{
+    "name": "nodejs-shop",
+    "version": "1.0.0",
+    "private": false,
+    "description": "Node.js port of the GoLang shopping microservice: same 40-endpoint surface, same email outbox worker (claim/bump/deliver/fail+alert with exponential backoff + jitter), same Redis payment-session idempotency and retry/backoff discipline, same schema.",
+    "main": "src/server.js",
+    "scripts": {
+        "start": "node src/server.js",
+        "dev": "node --watch src/server.js",
+        "test": "node --test",
+        "test:unit": "node --test test/",
+        "worker:email": "node src/email/worker.js",
+        "migrate": "node src/db/migrate.js"
+    },
+    "engines": {
+        "node": ">=20"
+    },
+    "license": "MIT",
+    "dependencies": {
+        "bcryptjs": "^2.4.3",
+        "dotenv": "^16.4.5",
+        "express": "^4.19.2",
+        "ioredis": "^5.4.1",
+        "jsonwebtoken": "^9.0.2",
+        "otplib": "^12.0.1",
+        "pg": "^8.12.0",
+        "redis": "^4.7.0"
+    }
+}

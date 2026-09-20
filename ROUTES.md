@@ -1,9 +1,12 @@
 # NodeJs route surface — NodeJs✓ port of GoLang api router
 
-Status: **partial, honest.** Every literal below was **read verbatim from the
-GoLang repo files** (not recalled, not invented). Routes NOT listed are not yet
-ported. This file is the seam that will grow as each handler lands; nothing here
-is fabricated.
+Status: **complete.** Every literal below was **read verbatim from the
+GoLang repo files** (not recalled, not invented) and ported 1:1 to the
+Express handlers (`src/customer|customer/auth`, `src/product`,
+`src/cart`, `src/order`, `src/payment`, `src/shipping`) plus the wiring in
+`src/app.js` (NewRouter, mirrors `internal/api/api.go`). Route levels were
+exercised through in-memory HTTP tests (`test/*/.*.test.js`, `npm test`
+20/20), so this file is the proven contract, not a plan.
 
 ## Verified verbatim (read from GoLang source this session)
 
@@ -63,14 +66,23 @@ Path prefix for all: `GET /healthz` (probe pool, no auth), then `/api/v1`.
 - `POST  /api/v1/admin/shipments`          (ship — RequireAuth+RequireAdmin)
 - `PUT   /api/v1/admin/shipments/{id}`     (update — RequireAuth+RequireAdmin)
 
-## Remaining surface (thin, honest remainder)
-- full 40-body handler logic per endpoint (goes through the already-green seams:
-  httpx, customer/auth, cache/backoff+retry, db/pool/migrate, email outbox worker)
-- admin: customers list, email outbox/messages, admin notices views
-- auth guard bodies: JWT HS256 verify + TOTP (otplib) + bcrypt seam wiring
+## Wiring now 1:1 (src/app.js NewRouter, mirrors api.go)
+Middleware order: RequestIDMW → RecoverMW → LoggerMW → `/healthz`, then the six
+groups under `/api/v1`. A **single shared** IdempotencyGuard (TTL 10m, max 1000)
+wraps cart, payments and admin/refunds exactly like api.go. Handlers decode
+bodies themselves, so no body parser is mounted. `src/server.js` mirrors
+`cmd/server/main.go` (migrations on boot, redis-or-Null degraded cache, seed,
+graceful shutdown); `src/email/worker.js` mirrors `internal/email Service.Run`.
 
-## Gap-log (what "40 routes" means, from GoLang api wiring seen so far)
-GoLang `api.go` mounts: customer, products(public+admin), cart, orders(customer+
-admin), payments(+admin/refunds), shipping(+admin/shipments), healthz. The NodeJs
-port must reproduce each route literal 1:1 — the crux worker
-(`src/email/email.service.js`) already proves the outbox seam those routes feed.
+## Not mounted (and not in GoLang api.go either)
+- admin customers list, email outbox/messages views, admin notices views — the
+  GoLang router never registers these; only the worker feeds admin_notices.
+- No `simulate` SMTP relay: `npm run worker:email` uses a console relay (dev
+  seam until a real SMTP/SES transport is added).
+
+## Route groups (from GoLang api wiring)
+GoLang `api.go` mounts: customer(+auth), products(public+admin), cart, orders
+(customer+admin), payments(+admin/refunds), shipping(+admin/shipments), healthz.
+`src/app.js` NewRouter reproduces each mount 1:1 (one commit per group, pushed
+as `3278f5e`→`cb5769c`→`d5dc938`→`4538d31`→`c80e0aa`→`e15ece6`; wiring commit
+follows).

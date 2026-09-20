@@ -68,6 +68,7 @@ class IdempotencyGuard {
       };
       res.end = (chunk) => {
         if (chunk) chunks.push(Buffer.from(chunk));
+        for (const c of chunks) origWrite.call(res, c);
         origEnd.call(res);
         return res;
       };

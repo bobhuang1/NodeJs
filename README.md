@@ -1,18 +1,16 @@
-# NodeJs — GoShop port
+# NodeJs — GoShop sample
 
-Node.js shopping service — a 1:1 port of the GoLang microservice
-(`github.com/bobhuang1/GoLang`, "GoShop"): the same 40-endpoint HTTP surface,
-the same PostgreSQL schema, the same idempotency/retry/backoff discipline, and
-the same email outbox worker contract.
+GoShop is sample code: a Node.js (Express) shopping service that demonstrates
+a 40-endpoint HTTP surface, a PostgreSQL schema, idempotency/retry/backoff
+discipline, Redis caching with a degraded-mode fallback, and an email outbox
+worker.
 
 Stack: **Node 20+ · Express 4 · pg · ioredis/redis · jsonwebtoken · otplib ·
 bcryptjs**. Tests run fully in-memory (no database or Redis required).
 
-## Port status
+## Status
 
-**Code-complete, test-green.** Every route literal, handler behaviour, SQL
-string, error message, status code and envelope shape was read verbatim from the
-GoLang sources and ported 1:1. `npm test` runs **20/20** tests green, including
+**Code-complete, test-green.** `npm test` runs **20/20** tests green, including
 HTTP-level suites for every route group (in-memory `pg` seam + real Express
 mounts).
 
@@ -28,23 +26,23 @@ mounts).
 | payments | `src/payment/` | 6 |
 | shipping | `src/shipping/` | 5 |
 
-The full literal-by-literal contract lives in `ROUTES.md`.
+The full per-endpoint breakdown lives in `ROUTES.md`.
 
-### Boot wiring (matches the GoLang binary)
+### Boot wiring
 
-| GoLang | NodeJs |
+| Component | NodeJs |
 |---|---|
-| `internal/api/api.go` | `src/app.js` — `NewRouter(deps)` |
-| `cmd/server/main.go` | `src/server.js` |
-| `cmd/server/seed.go` | `src/seed.js` |
-| `internal/email Service.Run` | `src/email/worker.js` CLI |
+| Router | `src/app.js` — `NewRouter(deps)` |
+| HTTP entrypoint | `src/server.js` |
+| Seed data | `src/seed.js` |
+| Email outbox worker | `src/email/worker.js` CLI |
 
-`src/server.js` mirrors `main.go` exactly: pool → embedded migrations on boot →
-Redis cache (falls back to a **no-op Null cache when Redis is unreachable**,
-"degraded mode") → token manager → services → **seed** (demo accounts +
-products) → router → HTTP listen with graceful shutdown. A single shared
-`IdempotencyGuard` wraps cart, payments and admin/refunds, and the middleware
-stack is RequestID → Recover → Logger, as in `api.go`.
+`src/server.js` runs: pool → embedded migrations on boot → Redis cache (falls
+back to a **no-op Null cache when Redis is unreachable**, "degraded mode") →
+token manager → services → **seed** (demo accounts + products) → router → HTTP
+listen with graceful shutdown. A single shared `IdempotencyGuard` wraps cart,
+payments and admin/refunds, and the middleware stack is RequestID → Recover →
+Logger.
 
 ## Architecture
 
@@ -94,8 +92,8 @@ cp .env.example .env
 | `EMAIL_WORKER_MAX_ATTEMPTS` | `5` | outbox retry cap |
 | `EMAIL_WORKER_BASE_DELAY_MS` | `100` | outbox backoff base |
 
-Floating values are rejected (digits only, like Go's `getenvInt`); missing
-values fall back to the defaults above.
+Floating values are rejected (digits only); missing values fall back to the
+defaults above.
 
 ## Run
 
@@ -126,27 +124,23 @@ On boot the server runs migrations and seeds idempotently:
 - **Seam suites** (`test/email/`, `test/http.js`, `test/db/pgmem.js`): worker
   claim→deliver→fail flow with pinned backoff, HTTP helpers, pool impl.
 
-## Deliberate divergences from GoLang
+## Implementation notes
 
 - **Migration runner**: Node applies `src/db/migrations/*.sql` in lexical order
-  inside per-file transactions and records them in `schema_migrations`; GoLang
-  embeds a single file at startup. Same tables, same result.
-- **Outbox tables**: Node's migration defines `email_messages` and
-  `admin_notices`; GoLang referenced them in SQL constants but never defined
-  them. Node adds them so the worker actually runs.
+  inside per-file transactions and records them in `schema_migrations`.
+- **Outbox tables**: the migration defines `email_messages` and
+  `admin_notices` so the outbox worker can actually run.
 - **Email relay**: the production/shape relay is a console log + success (no SMTP
-  dependency). GoLang ships only the relay interface + stub, so this is a dev
-  seam to be swapped for a real transport.
-- **No Docker/Make**: infra files from the GoLang repo are not ported.
+  dependency). Swap it for a real transport in production.
 
 ## Layout
 
 ```
 src/
   config.js          env seams (getstr/getnum, digit-only validation)
-  app.js             NewRouter — mirrors internal/api/api.go (all groups)
-  server.js          HTTP server — mirrors cmd/server/main.go
-  seed.js            idempotent demo accounts + products — mirrors seed.go
+  app.js             NewRouter — registers all route groups
+  server.js          HTTP server (migrations, seed, graceful shutdown)
+  seed.js            idempotent demo accounts + products
   auth/              token.js (JWT HS256) · password.js (bcrypt · 10) · totp.js
   cache/             backoff.js · cache.js (retry) · redis.js (ioredis seam)
   cart/  product/  customer/  order/  payment/  shipping/
@@ -161,9 +155,8 @@ test/
   email/             outbox worker test
 ```
 
-## Contract source of truth
+## API contract
 
 Route literals, outbox SQL, the backoff formula, idempotency TTLs, Redis keys,
-envelope shapes and messages were captured verbatim from the GoLang repository
-(`internal/…` files) and mirrored 1:1. See `ROUTES.md` for the per-endpoint
-breakdown and `git log` for the port history (one commit + push per group).
+envelope shapes and messages are documented in `ROUTES.md`. See `git log` for
+the change history.

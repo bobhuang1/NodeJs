@@ -160,3 +160,7 @@ test/
 Route literals, outbox SQL, the backoff formula, idempotency TTLs, Redis keys,
 envelope shapes and messages are documented in `ROUTES.md`. See `git log` for
 the change history.
+
+## License
+
+This project is free software, released under the **GNU General Public License v3.0**. You may redistribute and/or modify it under those terms; see [LICENSE.md](LICENSE.md) for the full text.

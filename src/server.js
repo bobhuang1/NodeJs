@@ -64,7 +64,11 @@ async function main() {
   const payments = new payment.Service(pool, cacheStore, gw, config.maxPaymentAttempts, config.paymentRetryBaseDelayMs);
   const shippings = new shipping.Service(pool);
 
-  await seed(pool, products);
+  // Demo accounts have a published password, so they are only created when
+  // explicitly asked for (SEED_DEMO=1).
+  if (process.env.SEED_DEMO === "1") {
+    await seed(pool, products);
+  }
 
   const app = NewRouter({
     pool,

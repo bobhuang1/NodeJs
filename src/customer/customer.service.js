@@ -121,17 +121,20 @@ class Service {
     if (tag.rowCount === 0) throw NotFound("customer not found");
   }
 
-  // ForgotPassword issues a one-time reset code for the email.
+  // ForgotPassword issues a one-time reset code for the email. The code must
+  // reach the owner out of band (email) and is never returned to the caller.
+  // Unknown emails succeed silently so the endpoint does not reveal which
+  // accounts exist. The sample has no mail relay: set DEMO_LOG_RESET_CODES=1 to
+  // have the code logged for local end-to-end testing.
   async ForgotPassword(email) {
     let row;
     try {
       row = await this.getByEmail(email);
     } catch (err) {
-      // Uniform answer: do not leak whether the email exists.
-      throw BadRequest("account not found");
+      return;
     }
     if (row.deleted_at) {
-      throw BadRequest("account not found");
+      return;
     }
     const code = randomDigits(6);
     const key = "pwdreset:" + email;
@@ -140,7 +143,9 @@ class Service {
     } catch (err) {
       throw Wrap(new Error("store reset code: " + String(err)));
     }
-    return code;
+    if (process.env.DEMO_LOG_RESET_CODES === "1") {
+      console.log("password reset code issued (demo logging enabled)", email, code);
+    }
   }
 
   // ResetPassword validates the one-time code and rotates the password hash.
@@ -180,6 +185,13 @@ class Service {
 
   // Enroll2FA provisions a TOTP secret and returns the otpauth URL.
   async Enroll2FA(customerID, email) {
+    // Re-enrolling would overwrite the secret and switch 2FA off without proof of
+    // the current authenticator, so an active 2FA must be disabled (with a valid
+    // code) first.
+    const current = await this.getByID(customerID);
+    if (current.totp_enabled) {
+      throw Conflict("2FA is already enabled; disable it with a valid code before enrolling again");
+    }
     let secret;
     let otpauthURL;
     try {

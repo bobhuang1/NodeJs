@@ -4,7 +4,8 @@
  * - each migration runs in a single transaction and records its name in
  *   schema_migrations(name TEXT PRIMARY KEY, applied_at timestamptz not null
  *   default now()); already-applied names are skipped.
- * - whole migration file is wrapped in its own BEGIN/COMMIT (001_init.sql does so).
+ * - migration files must NOT contain their own BEGIN/COMMIT: the runner's transaction
+ *   is what makes the schema change and its schema_migrations row atomic.
  */
 const fs = require("fs");
 const path = require("path");

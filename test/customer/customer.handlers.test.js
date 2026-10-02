@@ -88,15 +88,28 @@ test("customer + auth route literals: register/forgot/reset + own-or-admin guard
     });
     assert.equal(forgot.status, 200);
     const forgotBody = await forgot.json();
-    assert.equal(forgotBody.message, "reset code issued");
-    assert.match(forgotBody.code, /^[0-9]{6}$/);
-    assert.equal(forgotBody.note, "demo: the code would normally be emailed to " + EMAIL);
+    assert.deepEqual(forgotBody, {
+      message: "if that account exists, a reset code has been sent to its email address",
+    });
+    // The code is only stored server-side (it would be emailed), never returned.
+    const storedCode = (await cache.get("pwdreset:" + EMAIL)).toString();
+    assert.match(storedCode, /^[0-9]{6}$/);
+
+    // Unknown email: same answer, nothing stored.
+    pool.expectSQL(BY_EMAIL, { args: ["nobody@b.com"], rows: [] });
+    const unknown = await fetch(srv.base + "/api/v1/customers/forgot-password", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ email: "nobody@b.com" }),
+    });
+    assert.equal(unknown.status, 200);
+    assert.deepEqual(await unknown.json(), forgotBody);
 
     pool.expectSQL(RESET_PW, { rowCount: 1 });
     const reset = await fetch(srv.base + "/api/v1/customers/reset-password", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ email: EMAIL, code: forgotBody.code, new_password: "pw3" }),
+      body: JSON.stringify({ email: EMAIL, code: storedCode, new_password: "pw3" }),
     });
     assert.equal(reset.status, 200);
     assert.deepEqual(await reset.json(), { message: "password updated" });
@@ -196,9 +209,21 @@ test("login: password flow + 2FA challenge + redeem + 2FA lifecycle", async () =
     assert.equal(redeem.status, 200);
     assert.equal((await redeem.json()).two_factor_required, false);
 
+    // the challenge token alone must not authenticate any other route
+    const sneaky = await fetch(srv.base + "/api/v1/customers/me", {
+      headers: { Authorization: "Bearer " + challengeBody.challenge_token },
+    });
+    assert.equal(sneaky.status, 401);
+
     // audit the raw route literals with an authenticated caller
     const auth = { Authorization: "Bearer " + token };
 
+    // re-enrolling while 2FA is active is refused (it would switch 2FA off without a code)
+    pool.expectSQL(BY_ID, { args: [7], rows: [row2] });
+    const reenroll = await fetch(srv.base + "/api/v1/auth/2fa/enroll", { method: "POST", headers: auth });
+    assert.equal(reenroll.status, 409);
+
+    pool.expectSQL(BY_ID, { args: [7], rows: [ROW] });
     pool.expectSQL(`UPDATE customers SET totp_secret = $2, totp_enabled = FALSE, updated_at = now() WHERE id = $1 AND deleted_at IS NULL`, { rowCount: 1 });
     const enroll = await fetch(srv.base + "/api/v1/auth/2fa/enroll", { method: "POST", headers: auth });
     assert.equal(enroll.status, 200);

@@ -4,7 +4,7 @@
  * in src/auth/token.js (mirrors internal/auth.TokenManager). req.user carries
  * { customer_id, email, role } like httpx.ContextUser. */
 const { Unauthorized, Forbidden, writeError } = require("./respond.js");
-const { RoleAdmin } = require("../auth/token.js");
+const { RoleAdmin, TokenKindFull } = require("../auth/token.js");
 
 function bearer(req) {
   const raw = req.get("authorization") || "";
@@ -30,6 +30,12 @@ function requireAuth(tokens) {
     try {
       claims = tokens.parse(token);
     } catch (e) {
+      writeError(res, Unauthorized("invalid or expired token"));
+      return;
+    }
+    // Only a full access token authenticates a request. The 2FA challenge token
+    // proves the password step alone and is redeemable solely at /auth/login/2fa.
+    if (claims.kind !== TokenKindFull) {
       writeError(res, Unauthorized("invalid or expired token"));
       return;
     }

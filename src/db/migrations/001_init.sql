@@ -1,10 +1,21 @@
-BEGIN;
 CREATE TABLE IF NOT EXISTS schema_migrations (name TEXT PRIMARY KEY, applied_at TIMESTAMPTZ NOT NULL DEFAULT now());
 
-CREATE TYPE IF NOT EXISTS order_status AS ENUM ('pending','paid','processing','shipped','delivered','cancelled');
-CREATE TYPE IF NOT EXISTS charge_status AS ENUM ('pending','succeeded','failed','refunded');
-CREATE TYPE IF NOT EXISTS refund_status AS ENUM ('pending','succeeded','failed');
-CREATE TYPE IF NOT EXISTS shipment_status AS ENUM ('pending','picked','in_transit','delivered');
+DO $$ BEGIN
+    CREATE TYPE order_status AS ENUM ('pending','paid','processing','shipped','delivered','cancelled');
+EXCEPTION WHEN duplicate_object THEN NULL;
+END $$;
+DO $$ BEGIN
+    CREATE TYPE charge_status AS ENUM ('pending','succeeded','failed','refunded');
+EXCEPTION WHEN duplicate_object THEN NULL;
+END $$;
+DO $$ BEGIN
+    CREATE TYPE refund_status AS ENUM ('pending','succeeded','failed');
+EXCEPTION WHEN duplicate_object THEN NULL;
+END $$;
+DO $$ BEGIN
+    CREATE TYPE shipment_status AS ENUM ('pending','picked','in_transit','delivered');
+EXCEPTION WHEN duplicate_object THEN NULL;
+END $$;
 
 CREATE TABLE IF NOT EXISTS customers (
     id BIGSERIAL PRIMARY KEY,
@@ -128,4 +139,3 @@ CREATE TABLE IF NOT EXISTS admin_notices (
     status TEXT NOT NULL DEFAULT 'new',
     created_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
-COMMIT;

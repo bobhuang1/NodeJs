@@ -82,13 +82,12 @@ async function remove(svc, req, res, id) {
 async function forgotPassword(svc, req, res) {
   const in_ = await httpx.decodeJSON(req, res);
   if (in_ === null) return;
-  const code = await svc.ForgotPassword(in_.email ?? "");
-  // Demo only: the code would be emailed. Returning it makes the sample
-  // runnable end-to-end without an SMTP server.
+  await svc.ForgotPassword(in_.email ?? "");
+  // The code never travels back to the caller: anyone could otherwise reset any
+  // account knowing only its email. The answer is identical whether or not the
+  // account exists.
   httpx.writeOK(res, {
-    message: "reset code issued",
-    code,
-    note: "demo: the code would normally be emailed to " + (in_.email ?? ""),
+    message: "if that account exists, a reset code has been sent to its email address",
   });
 }
 

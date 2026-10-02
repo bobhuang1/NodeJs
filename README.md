@@ -39,7 +39,7 @@ The full per-endpoint breakdown lives in `ROUTES.md`.
 
 `src/server.js` runs: pool → embedded migrations on boot → Redis cache (falls
 back to a **no-op Null cache when Redis is unreachable**, "degraded mode") →
-token manager → services → **seed** (demo accounts + products) → router → HTTP
+token manager → services → **seed** (demo accounts + products, only with `SEED_DEMO=1`) → router → HTTP
 listen with graceful shutdown. A single shared `IdempotencyGuard` wraps cart,
 payments and admin/refunds, and the middleware stack is RequestID → Recover →
 Logger.
@@ -101,16 +101,21 @@ defaults above.
 npm install
 cp .env.example .env
 npm run migrate          # apply src/db/migrations/*.sql
-npm start                # server — auto-migrates + seeds on boot
+SEED_DEMO=1 npm start    # server — auto-migrates; SEED_DEMO=1 also seeds demo data
 npm run worker:email     # optional outbox worker (2 workers by default)
 npm test                 # full in-memory suite — no DB/Redis needed
 ```
 
-On boot the server runs migrations and seeds idempotently:
+On boot the server runs migrations. With `SEED_DEMO=1` it also seeds idempotently
+(never set this on a real deployment — the demo passwords below are public):
 
 - **admin** / `admin@example.test` / password `ChangeMe123!` (is_admin)
 - **customer** / `customer@example.test` / password `ChangeMe123!`
 - 5 demo products (mouse, keyboard, monitor, dock, webcam)
+
+`POST /customers/forgot-password` never returns the reset code (it would be
+emailed). For local testing set `DEMO_LOG_RESET_CODES=1` to have the code
+printed to the server log.
 
 ## Tests
 

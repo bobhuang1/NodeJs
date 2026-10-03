@@ -8,6 +8,8 @@ const { HashPassword } = require("../auth/password.js");
 const { ProvisionTOTP, VerifyTOTP } = require("../auth/totp.js");
 const { isMiss } = require("../cache/redis.js");
 
+const MAX_RESET_ATTEMPTS = 5;
+
 const passwordResetTTL = 10 * 60 * 1000; // Go: passwordResetTTL = 10 * time.Minute
 
 const BY_EMAIL_SQL =
@@ -159,6 +161,20 @@ class Service {
       throw Wrap(err);
     }
     if (String(stored) !== code) {
+      // MAX_RESET_ATTEMPTS wrong codes burn the code, so a 1-in-a-million guess
+      // cannot be repeated until it lands.
+      const failKey = "pwdreset-fail:" + email;
+      let failures = 0;
+      try { failures = Number(String(await this.cache.get(failKey))) || 0; } catch (_) { /* miss */ }
+      failures += 1;
+      try {
+        if (failures >= MAX_RESET_ATTEMPTS) {
+          await this.cache.del(key);
+          await this.cache.del(failKey);
+        } else {
+          await this.cache.set(failKey, String(failures), passwordResetTTL);
+        }
+      } catch (_) { /* best effort */ }
       throw BadRequest("invalid or expired reset code");
     }
     let hash;
@@ -180,6 +196,7 @@ class Service {
     // One-time code consumed.
     try {
       await this.cache.del(key); // best-effort
+      await this.cache.del("pwdreset-fail:" + email);
     } catch (err) { /* ignore */ }
   }
 

@@ -31,7 +31,7 @@ const MY_CHARGES =
   `SELECT ${CHARGE_COLS} FROM charges WHERE customer_id = $1 ORDER BY created_at DESC`;
 const ORDERS_FOR_UPDATE =
   `SELECT status, total_cents, currency FROM orders
-            WHERE id = $1 FOR UPDATE`;
+            WHERE id = $1 AND customer_id = $2 FOR UPDATE`;
 const INSERT_CHARGE =
   `INSERT INTO charges (order_id, customer_id, amount_cents, currency, idempotency_key)
             VALUES ($1,$2,$3,$4,$5)
@@ -55,7 +55,12 @@ const SELECT_REFUND_BY_KEY =
   `SELECT r.id::text, r.charge_id::text, c.order_id, r.customer_id, r.amount_cents, r.status,
                r.provider_refund_id, r.failure_reason, r.idempotency_key, r.created_at
             FROM refunds r JOIN charges c ON c.id = r.charge_id
-            WHERE r.idempotency_key = $1`;
+            WHERE r.idempotency_key = $1 AND r.customer_id = $2`;
+const ORDER_STATUS = `SELECT status FROM orders WHERE id = $1`;
+const LOCK_CHARGE = `SELECT 1 FROM charges WHERE id = $1::uuid FOR UPDATE`;
+const COMMITTED_REFUNDS =
+  `SELECT COALESCE(SUM(amount_cents) FILTER (WHERE status IN ('succeeded','pending')), 0) AS committed
+          FROM refunds WHERE charge_id = $1::uuid`;
 const MY_REFUNDS =
   `SELECT r.id::text, r.charge_id::text, c.order_id, r.customer_id, r.amount_cents, r.status,
                r.provider_refund_id, r.failure_reason, r.idempotency_key, r.created_at
@@ -108,8 +113,8 @@ function appFor(svc) {
 
 // expectChargeHappy scripts the pool for a fresh successful charge.
 function expectChargeHappy(pool, orderID, idemKey) {
-  pool.expectSQL(`SELECT ${CHARGE_COLS} FROM charges WHERE idempotency_key = $1`, { args: [idemKey], rows: [] });
-  pool.expectSQL(ORDERS_FOR_UPDATE, { args: [orderID], rows: [{ status: "pending", total_cents: "5000", currency: "usd" }] });
+  pool.expectSQL(`SELECT ${CHARGE_COLS} FROM charges WHERE idempotency_key = $1 AND customer_id = $2`, { args: [idemKey, 7], rows: [] });
+  pool.expectSQL(ORDERS_FOR_UPDATE, { args: [orderID, 7], rows: [{ status: "pending", total_cents: "5000", currency: "usd" }] });
   pool.expectSQL(INSERT_CHARGE, { args: [orderID, 7, 5000, "usd", idemKey], rows: [{ id: UUID_CHARGE }] });
   pool.expectSQL(UPDATE_CHARGE_SUCCEEDED, { args: [UUID_CHARGE, "ch_000001"] });
   pool.expectSQL(UPDATE_ORDER_PAID, { args: [orderID], rowCount: 1 });
@@ -177,8 +182,11 @@ test("payment route literals + guard: charges/refunds under /api/v1/payments + /
     assert.deepEqual((await other.json()).error, { code: "forbidden", message: "not allowed to view this charge" });
 
     pool.expectSQL(SELECT_CHARGES_BY_ORDER, { args: [10], rows: [SUCCEEDED_CHARGE_ROW] });
+    pool.expectSQL(ORDER_STATUS, { args: [10], rows: [{ status: "paid" }] });
     pool.expectSQL(REFUNDED_TOTAL, { args: [UUID_CHARGE], rows: [{ sum: 0 }] });
-    pool.expectSQL(SELECT_REFUND_BY_KEY, { args: ["ref_1"], rows: [] });
+    pool.expectSQL(SELECT_REFUND_BY_KEY, { args: ["ref_1", 7], rows: [] });
+    pool.expectSQL(LOCK_CHARGE, { args: [UUID_CHARGE] });
+    pool.expectSQL(COMMITTED_REFUNDS, { args: [UUID_CHARGE], rows: [{ committed: 0 }] });
     pool.expectSQL(INSERT_REFUND, { args: [UUID_CHARGE, 7, 5000, "ref_1"], rows: [{ id: UUID_REFUND }] });
     pool.expectSQL(UPDATE_REFUND_SUCCEEDED, { args: [UUID_REFUND, "re_000002"] });
     pool.expectSQL(UPDATE_CHARGE_REFUNDED, { args: [UUID_CHARGE] });
@@ -214,7 +222,9 @@ test("payment route literals + guard: charges/refunds under /api/v1/payments + /
 
     pool.expectSQL(SELECT_CHARGES_BY_ORDER, { args: [10], rows: [SUCCEEDED_CHARGE_ROW] });
     pool.expectSQL(REFUNDED_TOTAL, { args: [UUID_CHARGE], rows: [{ sum: 0 }] });
-    pool.expectSQL(SELECT_REFUND_BY_KEY, { args: ["ref_admin2"], rows: [] });
+    pool.expectSQL(SELECT_REFUND_BY_KEY, { args: ["ref_admin2", 1], rows: [] });
+    pool.expectSQL(LOCK_CHARGE, { args: [UUID_CHARGE] });
+    pool.expectSQL(COMMITTED_REFUNDS, { args: [UUID_CHARGE], rows: [{ committed: 0 }] });
     pool.expectSQL(INSERT_REFUND, { args: [UUID_CHARGE, 1, 5000, "ref_admin2"], rows: [{ id: UUID_REFUND }] });
     pool.expectSQL(UPDATE_REFUND_SUCCEEDED, { args: [UUID_REFUND, "re_000003"] });
     pool.expectSQL(UPDATE_CHARGE_REFUNDED, { args: [UUID_CHARGE] });
@@ -234,8 +244,8 @@ test("payment decline -> 422 payment_declined (no retry)", async () => {
   const pool = memPool();
   const cache = new MemCache();
   const svc = new Service(pool, cache, NewStubGateway(), 4, 1);
-  pool.expectSQL(`SELECT ${CHARGE_COLS} FROM charges WHERE idempotency_key = $1`, { args: ["pay_x"], rows: [] });
-  pool.expectSQL(ORDERS_FOR_UPDATE, { args: [10], rows: [{ status: "pending", total_cents: "5000", currency: "usd" }] });
+  pool.expectSQL(`SELECT ${CHARGE_COLS} FROM charges WHERE idempotency_key = $1 AND customer_id = $2`, { args: ["pay_x", 7], rows: [] });
+  pool.expectSQL(ORDERS_FOR_UPDATE, { args: [10, 7], rows: [{ status: "pending", total_cents: "5000", currency: "usd" }] });
   pool.expectSQL(INSERT_CHARGE, { args: [10, 7, 5000, "usd", "pay_x"], rows: [{ id: UUID_CHARGE }] });
   pool.expectSQL(UPDATE_CHARGE_FAILED, { args: [UUID_CHARGE, "payment declined: stub: card declined"] });
 
@@ -251,12 +261,12 @@ test("payment transient network -> restart -> settles (ch_000001)", async () => 
   const svc = new Service(pool, cache, NewStubGateway(), 3, 1);
   const idemKey = "pay_net";
   // attempt 1: fresh claim, provider blips
-  pool.expectSQL(`SELECT ${CHARGE_COLS} FROM charges WHERE idempotency_key = $1`, { args: [idemKey], rows: [] });
-  pool.expectSQL(ORDERS_FOR_UPDATE, { args: [10], rows: [{ status: "pending", total_cents: "5000", currency: "usd" }] });
+  pool.expectSQL(`SELECT ${CHARGE_COLS} FROM charges WHERE idempotency_key = $1 AND customer_id = $2`, { args: [idemKey, 7], rows: [] });
+  pool.expectSQL(ORDERS_FOR_UPDATE, { args: [10, 7], rows: [{ status: "pending", total_cents: "5000", currency: "usd" }] });
   pool.expectSQL(INSERT_CHARGE, { args: [10, 7, 5000, "usd", idemKey], rows: [{ id: UUID_CHARGE }] });
   pool.expectSQL(UPDATE_CHARGE_TRANSIENT, { args: [UUID_CHARGE, "transient payment failure: stub: upstream network timeout"] });
   // attempt 2: resume from pending (no provider ref), provider settles on retry
-  pool.expectSQL(`SELECT ${CHARGE_COLS} FROM charges WHERE idempotency_key = $1`, { args: [idemKey], rows: [PENDING_CHARGE_ROW] });
+  pool.expectSQL(`SELECT ${CHARGE_COLS} FROM charges WHERE idempotency_key = $1 AND customer_id = $2`, { args: [idemKey, 7], rows: [PENDING_CHARGE_ROW] });
   pool.expectSQL(UPDATE_CHARGE_SUCCEEDED, { args: [UUID_CHARGE, "ch_000001"] });
   pool.expectSQL(UPDATE_ORDER_PAID, { args: [10], rowCount: 1 });
 
@@ -271,10 +281,48 @@ test("refund: fully refunded charge is a conflict", async () => {
   const cache = new MemCache();
   const svc = new Service(pool, cache, NewStubGateway(), 4, 1);
   pool.expectSQL(`SELECT ${CHARGE_COLS} FROM charges WHERE order_id = $1`, { args: [10], rows: [SUCCEEDED_CHARGE_ROW] });
+  pool.expectSQL(ORDER_STATUS, { args: [10], rows: [{ status: "paid" }] });
   pool.expectSQL(REFUNDED_TOTAL, { args: [UUID_CHARGE], rows: [{ sum: 5000 }] });
 
   await assert.rejects(
     svc.Refund(10, 7, 0, "ref_x", "", false),
     (err) => err.status === 409 && err.code === "conflict" && err.message === "charge is already fully refunded"
   );
+});
+
+test("refund: a customer cannot refund an order that has shipped", async () => {
+  const pool = memPool();
+  const svc = new Service(pool, new MemCache(), NewStubGateway(), 4, 1);
+  pool.expectSQL(SELECT_CHARGES_BY_ORDER, { args: [10], rows: [SUCCEEDED_CHARGE_ROW] });
+  pool.expectSQL(ORDER_STATUS, { args: [10], rows: [{ status: "shipped" }] });
+
+  await assert.rejects(
+    svc.Refund(10, 7, 0, "ref_s", "", false),
+    (err) => err.status === 409 && /administrator/.test(err.message)
+  );
+});
+
+test("refund: concurrent refunds cannot exceed the charge", async () => {
+  const pool = memPool();
+  const svc = new Service(pool, new MemCache(), NewStubGateway(), 4, 1);
+  pool.expectSQL(SELECT_CHARGES_BY_ORDER, { args: [10], rows: [SUCCEEDED_CHARGE_ROW] });
+  pool.expectSQL(REFUNDED_TOTAL, { args: [UUID_CHARGE], rows: [{ sum: 0 }] });
+  pool.expectSQL(SELECT_REFUND_BY_KEY, { args: ["ref_b", 1], rows: [] });
+  pool.expectSQL(LOCK_CHARGE, { args: [UUID_CHARGE] });
+  // another refund for 4000 committed after the first check
+  pool.expectSQL(COMMITTED_REFUNDS, { args: [UUID_CHARGE], rows: [{ committed: 4000 }] });
+
+  await assert.rejects(
+    svc.Refund(10, 1, 3000, "ref_b", "", true),
+    (err) => err.status === 409 && /1000 cents remain/.test(err.message)
+  );
+});
+
+test("charge: another customer's order is not found", async () => {
+  const pool = memPool();
+  const svc = new Service(pool, new MemCache(), NewStubGateway(), 4, 1);
+  pool.expectSQL(`SELECT ${CHARGE_COLS} FROM charges WHERE idempotency_key = $1 AND customer_id = $2`, { args: ["pay_y", 8], rows: [] });
+  pool.expectSQL(ORDERS_FOR_UPDATE, { args: [10, 8], rows: [] });
+
+  await assert.rejects(svc.Charge(10, 8, "pay_y", ""), (err) => err.status === 404);
 });

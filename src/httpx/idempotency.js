@@ -9,9 +9,13 @@
  * Express adaptation: the downstream chain is asynchronous here (Go's chi chain
  * is synchronous), so the response is captured via write()/end() interception
  * and recorded on the res 'finish' event. */
+const crypto = require("node:crypto");
+const { writeError, Conflict } = require("./respond.js");
+
 class IdempotencyGuard {
   constructor(ttlMs, maxEntry) {
     this.store = new Map();
+    this.inFlight = new Set();
     this.ttl = ttlMs > 0 ? ttlMs : 60000; // ttlSorrogate: <=0 -> time.Minute
     this.maxEntry = maxEntry;
     const timer = setInterval(() => this.sweep(), 2 * this.ttl);
@@ -41,13 +45,23 @@ class IdempotencyGuard {
     const guard = this;
     return function idempotencyMW(req, res, next) {
       const key = req.get("Idempotency-Key");
-      if (key === undefined || key === "") {
+      // Only state-changing POSTs are replayed; a GET carrying the header must always
+      // see fresh data.
+      if (key === undefined || key === "" || req.method !== "POST") {
         next();
         return;
       }
-      // Go uses r.URL.Path (full path); Express originalUrl is the full path.
-      const cacheKey = req.method + " " + req.originalUrl.split("?")[0] + " " + key;
+      // Keys are chosen by clients, so the cache is partitioned by caller: without the
+      // credential in the key, a second customer reusing a key would be served the
+      // first customer's cached response. The token is hashed, never stored as-is.
+      const caller = crypto.createHash("sha256").update(req.get("authorization") || "").digest("hex");
+      const cacheKey = req.method + " " + req.originalUrl.split("?")[0] + " " + caller + " " + key;
       const now = Date.now();
+
+      if (guard.inFlight.has(cacheKey)) {
+        writeError(res, Conflict("a request with this Idempotency-Key is still being processed"));
+        return;
+      }
 
       const cached = guard.store.get(cacheKey);
       if (cached && now < cached.expires) {
@@ -72,7 +86,13 @@ class IdempotencyGuard {
         origEnd.call(res);
         return res;
       };
+      guard.inFlight.add(cacheKey);
+      res.on("close", () => guard.inFlight.delete(cacheKey));
       res.on("finish", () => {
+        guard.inFlight.delete(cacheKey);
+        // Only successful outcomes are replayed; caching a failure would hand a client
+        // that retries after a transient error the same error for the whole TTL.
+        if (res.statusCode < 200 || res.statusCode >= 300) return;
         guard.store.set(cacheKey, {
           body: Buffer.concat(chunks),
           status: res.statusCode,

@@ -166,6 +166,20 @@ Route literals, outbox SQL, the backoff formula, idempotency TTLs, Redis keys,
 envelope shapes and messages are documented in `ROUTES.md`. See `git log` for
 the change history.
 
+## Security notes
+
+- Charges are only accepted for the caller's own orders. Customers can refund
+  their own orders only while the order is `paid` (before fulfilment); later
+  refunds are an admin decision. Refunds are serialised per charge, so concurrent
+  refunds can never exceed the charged amount.
+- `Idempotency-Key` is scoped to the caller in both layers (in-memory guard and
+  the `UNIQUE (customer_id, idempotency_key)` constraints from migration 002). The
+  guard replays successful POSTs only and answers 409 to a concurrent duplicate.
+- Login, 2FA, forgot-password and reset-password are rate limited per client IP
+  (10 per minute, in memory). Five wrong reset codes burn the code.
+- The server refuses to start with the published default `JWT_SECRET` unless
+  `SEED_DEMO=1` (local demo mode).
+
 ## License
 
 This project is free software, released under the **GNU General Public License v3.0**. You may redistribute and/or modify it under those terms; see [LICENSE.md](LICENSE.md) for the full text.

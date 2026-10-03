@@ -3,6 +3,7 @@
  * VERBATIM. Routes() mounts /auth (login, login/2fa, logout, 2fa/*) and
  * /customers (register, forgot/reset-password, own-or-admin CRUD). */
 const express = require("express");
+const { rateLimiter } = require("../httpx/ratelimit.js");
 const httpx = require("../httpx/respond.js");
 const { requireAuth } = require("../httpx/auth.js");
 const { ChallengeKind, RoleAdmin, RoleCustomer } = require("../auth/token.js");
@@ -206,10 +207,13 @@ async function disable2FA(svc, req, res) {
 
 function routes(svc, tokens) {
   const r = express.Router();
+  // Credential endpoints are throttled per client IP: without a limit the password,
+  // the 6-digit TOTP code and the 6-digit reset code can all be brute-forced.
+  const credentials = rateLimiter(10, 60 * 1000);
 
   const authRoutes = express.Router();
-  authRoutes.post("/login", guard((req, res) => login(svc, tokens, req, res)));
-  authRoutes.post("/login/2fa", guard((req, res) => login2FA(svc, tokens, req, res)));
+  authRoutes.post("/login", credentials, guard((req, res) => login(svc, tokens, req, res)));
+  authRoutes.post("/login/2fa", credentials, guard((req, res) => login2FA(svc, tokens, req, res)));
   authRoutes.post("/logout", guard(logout));
 
   const auth2 = express.Router();
@@ -222,8 +226,8 @@ function routes(svc, tokens) {
 
   const cRoutes = express.Router();
   cRoutes.post("/", guard((req, res) => register(svc, req, res)));
-  cRoutes.post("/forgot-password", guard((req, res) => forgotPassword(svc, req, res)));
-  cRoutes.post("/reset-password", guard((req, res) => resetPassword(svc, req, res)));
+  cRoutes.post("/forgot-password", credentials, guard((req, res) => forgotPassword(svc, req, res)));
+  cRoutes.post("/reset-password", credentials, guard((req, res) => resetPassword(svc, req, res)));
 
   const cAuth = express.Router();
   cAuth.use(requireAuth(tokens));

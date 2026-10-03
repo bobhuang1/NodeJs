@@ -54,6 +54,12 @@ async function main() {
     console.log("redis connected", config.redisAddr);
   }
 
+  // The default signing secret is published in the README and .env.example; anyone
+  // could mint admin tokens with it. Accept it only in demo mode (SEED_DEMO=1).
+  if (config.jwtSecret === config.defaultJWTSecret && process.env.SEED_DEMO !== "1") {
+    console.error("JWT_SECRET is unset or still the published default; set a strong secret (or SEED_DEMO=1 for a local demo)");
+    process.exit(1);
+  }
   const tokens = new auth.TokenManager(config.jwtSecret, config.jwtTTLMinutes, config.jwtChallengeTTLMinutes);
 
   const customers = new customer.Service(pool, cacheStore);

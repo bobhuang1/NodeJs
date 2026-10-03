@@ -59,9 +59,12 @@ class Service {
     // Replay / claim the charge (see Go comment for the resume semantics).
     let replayed;
     try {
-      replayed = await this.findChargeByKey(idemKey);
+      replayed = await this.findChargeByKey(customerID, idemKey);
     } catch (err) {
       throw err;
+    }
+    if (replayed && Number(replayed.order_id) !== Number(orderID)) {
+      throw Conflict("this Idempotency-Key was already used for a different order");
     }
     if (replayed && (replayed.status !== ChargePending || replayed.provider_charge_id !== "")) {
       return replayed;
@@ -82,8 +85,8 @@ class Service {
         try {
           row = await tx.queryRow(
             `SELECT status, total_cents, currency FROM orders
-            WHERE id = $1 FOR UPDATE`,
-            [orderID]
+            WHERE id = $1 AND customer_id = $2 FOR UPDATE`,
+            [orderID, customerID]
           );
         } catch (err) {
           throw Wrap(err);
@@ -257,14 +260,15 @@ class Service {
     }
   }
 
-  // findChargeByKey replays a previously claimed charge, if the key is known.
-  async findChargeByKey(idemKey) {
+  // findChargeByKey replays this customer's previously claimed charge, if the key is
+  // known. Keys are client-chosen, so the lookup is scoped to the caller.
+  async findChargeByKey(customerID, idemKey) {
     let row;
     try {
       row = await this.pool.queryRow(
         `SELECT ${CHARGE_COLS}
-        FROM charges WHERE idempotency_key = $1`,
-        [idemKey]
+        FROM charges WHERE idempotency_key = $1 AND customer_id = $2`,
+        [idemKey, customerID]
       );
     } catch (err) {
       throw Wrap(err);
@@ -335,6 +339,21 @@ class Service {
     if (!admin && charge.customer_id !== actingCustomer) {
       throw Forbidden("not allowed to refund this order");
     }
+    // A customer may cancel-and-refund only before fulfilment starts; later refunds
+    // are an admin (returns) decision, otherwise a customer could pay, receive the
+    // goods and refund themselves.
+    if (!admin) {
+      let orderRow;
+      try {
+        orderRow = await this.pool.queryRow(`SELECT status FROM orders WHERE id = $1`, [orderID]);
+      } catch (err) {
+        throw Wrap(err);
+      }
+      const orderStatus = orderRow ? orderRow.status : "unknown";
+      if (orderStatus !== "paid") {
+        throw Conflict(`orders in status ${orderStatus} can only be refunded by an administrator`);
+      }
+    }
     if (charge.status === ChargeFailed || charge.status === ChargePending) {
       throw Conflict("charge has no collected funds to refund");
     }
@@ -366,12 +385,31 @@ class Service {
   }
 
   async refundOnce(charge, actingCustomer, amountCents, idemKey, reason) {
-    const cached = await this.findRefundByKey(idemKey);
+    const cached = await this.findRefundByKey(actingCustomer, idemKey);
     if (cached !== null && cached !== undefined) return cached;
 
     let refundID;
     const tx = await this.pool.begin();
     try {
+      // Serialise refunds per charge and re-check the remaining amount under the lock:
+      // concurrent refunds with different keys could otherwise exceed the charge.
+      // Pending refunds count as committed money.
+      let committed;
+      try {
+        await tx.exec(`SELECT 1 FROM charges WHERE id = $1::uuid FOR UPDATE`, [charge.id]);
+        const sum = await tx.queryRow(
+          `SELECT COALESCE(SUM(amount_cents) FILTER (WHERE status IN ('succeeded','pending')), 0) AS committed
+          FROM refunds WHERE charge_id = $1::uuid`,
+          [charge.id]
+        );
+        committed = Number(sum ? Object.values(sum)[0] : 0);
+      } catch (err) {
+        throw Wrap(err);
+      }
+      if (amountCents > charge.amount_cents - committed) {
+        throw Conflict(`only ${charge.amount_cents - committed} cents remain refundable on this charge`);
+      }
+
       let ins;
       try {
         ins = await tx.queryRow(
@@ -515,15 +553,15 @@ class Service {
     return Number(Object.values(row)[0] || 0);
   }
 
-  async findRefundByKey(idemKey) {
+  async findRefundByKey(customerID, idemKey) {
     let row;
     try {
       row = await this.pool.queryRow(
         `SELECT r.id::text, r.charge_id::text, c.order_id, r.customer_id, r.amount_cents, r.status,
                r.provider_refund_id, r.failure_reason, r.idempotency_key, r.created_at
         FROM refunds r JOIN charges c ON c.id = r.charge_id
-        WHERE r.idempotency_key = $1`,
-        [idemKey]
+        WHERE r.idempotency_key = $1 AND r.customer_id = $2`,
+        [idemKey, customerID]
       );
     } catch (err) {
       throw Wrap(err);

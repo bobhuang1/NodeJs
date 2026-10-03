@@ -24,6 +24,7 @@ module.exports = {
   redisAddr: getstr("REDIS_ADDR", "localhost:6379"),
   redisPassword: process.env.REDIS_PASSWORD ?? "", // no fallback, like Go
   jwtSecret: getstr("JWT_SECRET", "dev-secret-change-me"),
+  defaultJWTSecret: "dev-secret-change-me", // refused at startup outside SEED_DEMO=1
   jwtTTLMinutes: getnum("JWT_TTL_MINUTES", 60),
   jwtChallengeTTLMinutes: getnum("JWT_CHALLENGE_TTL_MINUTES", 5),
   totpIssuer: getstr("TOTP_ISSUER", "GoShop"),

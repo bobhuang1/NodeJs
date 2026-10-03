@@ -136,7 +136,7 @@ class Service {
       } catch (err) {
         if (err && err.code === "23505") {
           // Same idempotency key: replay the already-created order.
-          return await this.replayOrder(idemKey);
+          return await this.replayOrder(customerID, idemKey);
         }
         throw Wrap(err);
       }
@@ -154,12 +154,14 @@ class Service {
     }
   }
 
-  // replayOrder returns the already-created order for a repeated checkout key.
-  async replayOrder(idemKey) {
+  // replayOrder returns this customer's already-created order for a repeated checkout
+  // key. Keys are client-chosen and unique per customer, so another customer's order
+  // is never returned.
+  async replayOrder(customerID, idemKey) {
     const row = await this.pool.queryRow(
       `SELECT id, customer_id, status, total_cents, currency, version, created_at, updated_at
-      FROM orders WHERE idempotency_key = $1`,
-      [idemKey]
+      FROM orders WHERE idempotency_key = $1 AND customer_id = $2`,
+      [idemKey, customerID]
     );
     if (!row) throw NotFound("order for this key was rolled back");
     const items = await this.linesForOrder(row.id);
